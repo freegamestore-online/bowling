@@ -489,12 +489,40 @@ export function Game({ onScore, onGameOver }: GameProps) {
       }
     };
 
-    const handlePointerDown = () => {
-      inputAction();
+    let pointerDown = false;
+    let pointerStartX = 0;
+    let aimXAtPointerStart = 0;
+
+    const handlePointerDown = (e: PointerEvent) => {
+      if (throwPhase === "aiming") {
+        pointerDown = true;
+        pointerStartX = e.clientX;
+        aimXAtPointerStart = aimX;
+      } else {
+        inputAction();
+      }
+    };
+
+    const handlePointerMove = (e: PointerEvent) => {
+      if (!pointerDown || throwPhase !== "aiming") return;
+      const dx = (e.clientX - pointerStartX) * 0.02;
+      aimX = Math.max(
+        -LANE_WIDTH / 2 + 0.5,
+        Math.min(LANE_WIDTH / 2 - 0.5, aimXAtPointerStart + dx),
+      );
+    };
+
+    const handlePointerUp = () => {
+      if (pointerDown && throwPhase === "aiming") {
+        pointerDown = false;
+        inputAction();
+      }
     };
 
     window.addEventListener("keydown", handleKeyDown);
     canvas.addEventListener("pointerdown", handlePointerDown);
+    canvas.addEventListener("pointermove", handlePointerMove);
+    canvas.addEventListener("pointerup", handlePointerUp);
 
     // Main loop
     startAiming();
@@ -503,8 +531,8 @@ export function Game({ onScore, onGameOver }: GameProps) {
       const dt = engine.getDeltaTime() / 1000;
 
       if (throwPhase === "aiming") {
-        // Auto-oscillate aim
-        aimX += aimDir * 2.5 * dt;
+        // Auto-oscillate aim (pause while touch-dragging)
+        if (!pointerDown) aimX += aimDir * 2.5 * dt;
         if (aimX > LANE_WIDTH / 2 - 0.5) {
           aimX = LANE_WIDTH / 2 - 0.5;
           aimDir = -1;
@@ -639,6 +667,8 @@ export function Game({ onScore, onGameOver }: GameProps) {
     return () => {
       window.removeEventListener("keydown", handleKeyDown);
       canvas.removeEventListener("pointerdown", handlePointerDown);
+      canvas.removeEventListener("pointermove", handlePointerMove);
+      canvas.removeEventListener("pointerup", handlePointerUp);
       window.removeEventListener("resize", onResize);
       engine.dispose();
     };
