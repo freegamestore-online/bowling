@@ -1,5 +1,6 @@
 @import "tailwindcss";
 
+/* Fonts loaded via <link> in index.html (Manrope + Fraunces from Google Fonts) */
 :root {
   --paper: #ffffff;
   --ink: #1a1a1a;
