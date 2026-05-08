@@ -9,7 +9,7 @@
   },
   "dependencies": {
     "@babylonjs/core": "^7",
-    "@freegamestore/games": "^0.6.0",
+    "@freegamestore/games": "^0.7.0",
     "react": "^19",
     "react-dom": "^19"
   },
