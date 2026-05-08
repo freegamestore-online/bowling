@@ -9,6 +9,7 @@
   },
   "dependencies": {
     "@babylonjs/core": "^7",
+    "@freeappstore/games": "^0.3.0",
     "react": "^19",
     "react-dom": "^19"
   },
