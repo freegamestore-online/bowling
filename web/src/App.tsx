@@ -11,9 +11,10 @@ function getBestScore(): number {
 }
 
 export default function App() {
-  const [phase, setPhase] = useState<GamePhase>("menu");
+  const [phase, setPhase] = useState<GamePhase>("playing");
   const [score, setScore] = useState(0);
   const [bestScore, setBestScore] = useState(getBestScore);
+  const [gameKey, setGameKey] = useState(0);
   const scoreRef = useRef(0);
 
   const handleScore = useCallback((s: number) => {
@@ -34,6 +35,7 @@ export default function App() {
   const start = useCallback(() => {
     setScore(0);
     scoreRef.current = 0;
+    setGameKey((k) => k + 1);
     setPhase("playing");
   }, []);
 
@@ -62,37 +64,22 @@ export default function App() {
       }
     >
       <div className="relative w-full h-full min-h-[400px]">
-        {phase === "playing" ? (
-          <Game onScore={handleScore} onGameOver={handleGameOver} />
-        ) : (
-          <div className="flex flex-col items-center justify-center h-full gap-4">
-            <h1
-              className="text-4xl font-bold"
-              style={{ fontFamily: "Fraunces, serif" }}
+        <Game key={gameKey} onScore={handleScore} onGameOver={handleGameOver} />
+        {phase === "over" && (
+          <div className="absolute inset-0 flex flex-col items-center justify-center gap-4" style={{ background: "rgba(0,0,0,0.55)" }}>
+            <p
+              className="text-xl font-bold"
+              style={{ color: "var(--accent)", fontFamily: "Fraunces, serif" }}
             >
-              Bowling
-            </h1>
-            {phase === "over" && (
-              <p
-                className="text-xl font-bold"
-                style={{ color: "var(--accent)", fontFamily: "Fraunces, serif" }}
-              >
-                Game Over! Final Score: {score}
-              </p>
-            )}
-            <p style={{ color: "var(--muted)" }}>
-              Aim with arrow keys or drag. Space/tap to throw.
+              Game Over! Final Score: {score}
             </p>
             <button
               onClick={start}
               className="px-6 py-3 rounded-xl font-semibold"
               style={{ background: "var(--accent)", color: "#fff" }}
             >
-              {phase === "menu" ? "Start Game" : "Play Again"}
+              Play Again
             </button>
-            <p className="text-xs" style={{ color: "var(--muted)" }}>
-              Press Space or Enter to start
-            </p>
           </div>
         )}
       </div>
