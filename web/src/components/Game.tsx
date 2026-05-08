@@ -4,6 +4,7 @@ import * as BABYLON from "@babylonjs/core";
 interface GameProps {
   onScore: (score: number) => void;
   onGameOver: () => void;
+  onStats?: (stats: { frame: number }) => void;
 }
 
 // --- Pin layout: standard triangle, 10 pins ---
@@ -93,13 +94,15 @@ function computeTotalScore(frames: FrameScore[]): number {
 
 type ThrowPhase = "aiming" | "power" | "rolling" | "settling" | "done";
 
-export function Game({ onScore, onGameOver }: GameProps) {
+export function Game({ onScore, onGameOver, onStats }: GameProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const engineRef = useRef<BABYLON.Engine | null>(null);
   const onScoreRef = useRef(onScore);
   const onGameOverRef = useRef(onGameOver);
+  const onStatsRef = useRef(onStats);
   onScoreRef.current = onScore;
   onGameOverRef.current = onGameOver;
+  onStatsRef.current = onStats;
 
   const cleanup = useCallback(() => {
     if (engineRef.current) {
@@ -483,6 +486,7 @@ export function Game({ onScore, onGameOver }: GameProps) {
     function updateScore() {
       const total = computeTotalScore(frames);
       onScoreRef.current(total);
+      onStatsRef.current?.({ frame: Math.min(currentFrame + 1, 10) });
     }
 
     function startAiming() {
@@ -654,6 +658,7 @@ export function Game({ onScore, onGameOver }: GameProps) {
     canvas.addEventListener("pointerup", handlePointerUp);
 
     // ---- Main loop ----
+    onStatsRef.current?.({ frame: 1 });
     startAiming();
 
     scene.registerBeforeRender(() => {

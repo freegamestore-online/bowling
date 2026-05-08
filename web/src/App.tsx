@@ -15,11 +15,16 @@ export default function App() {
   const [score, setScore] = useState(0);
   const [bestScore, setBestScore] = useState(getBestScore);
   const [gameKey, setGameKey] = useState(0);
+  const [frame, setFrame] = useState(1);
   const scoreRef = useRef(0);
 
   const handleScore = useCallback((s: number) => {
     scoreRef.current = s;
     setScore(s);
+  }, []);
+
+  const handleStats = useCallback((stats: { frame: number }) => {
+    setFrame(stats.frame);
   }, []);
 
   const handleGameOver = useCallback(() => {
@@ -57,6 +62,7 @@ export default function App() {
           stats={[
             { label: "Score", value: score, accent: true },
             { label: "Best", value: bestScore },
+            { label: "Frame", value: `${frame}/10` },
           ]}
           actions={<GameAuth />}
           onRestart={start}
@@ -65,7 +71,7 @@ export default function App() {
       }
     >
       <div className="relative w-full h-full min-h-[400px]">
-        <Game key={gameKey} onScore={handleScore} onGameOver={handleGameOver} />
+        <Game key={gameKey} onScore={handleScore} onGameOver={handleGameOver} onStats={handleStats} />
         {phase === "over" && (
           <div className="absolute inset-0 flex flex-col items-center justify-center gap-4" style={{ background: "rgba(0,0,0,0.55)" }}>
             <p
