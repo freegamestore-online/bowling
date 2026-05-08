@@ -334,14 +334,6 @@ export function Game({ onScore, onGameOver }: GameProps) {
       "backdrop-filter:blur(4px);transition:opacity 0.3s;";
     hudDiv.appendChild(phaseLabel);
 
-    // Frame info
-    const frameLabel = document.createElement("div");
-    frameLabel.style.cssText =
-      "position:absolute;top:12px;right:12px;" +
-      "font-family:Manrope,sans-serif;font-size:13px;font-weight:600;" +
-      "color:rgba(255,255,255,0.7);text-shadow:0 1px 4px rgba(0,0,0,0.5);" +
-      "padding:4px 12px;border-radius:8px;background:rgba(0,0,0,0.3);";
-    hudDiv.appendChild(frameLabel);
 
     // Instructions (fade out)
     const instrLabel = document.createElement("div");
@@ -420,9 +412,6 @@ export function Game({ onScore, onGameOver }: GameProps) {
     }
 
     function updateHUD() {
-      const throwNum = currentThrow + 1;
-      frameLabel.textContent = `Frame ${currentFrame + 1} / ${TOTAL_FRAMES}  -  Ball ${throwNum}`;
-
       if (throwPhase === "aiming") {
         phaseLabel.textContent = "AIM";
         phaseLabel.style.opacity = "1";

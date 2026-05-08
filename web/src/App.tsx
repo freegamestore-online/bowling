@@ -59,6 +59,7 @@ export default function App() {
             { label: "Best", value: bestScore },
           ]}
           actions={<GameAuth />}
+          onRestart={start}
           rules={<div><h3 style={{fontWeight:700}}>Bowling</h3><h4 style={{fontWeight:600}}>Controls</h4><ul><li>Aim with left/right</li><li>Set power, then throw</li></ul><h4 style={{fontWeight:600}}>Rules</h4><ul><li>Full 10-frame game</li><li>Strikes (X) and spares (/) score bonus points</li><li>3D physics simulation</li></ul><h4 style={{fontWeight:600}}>Scoring</h4><ul><li>Strike = 10 + next 2 rolls</li><li>Spare = 10 + next 1 roll</li><li>Perfect game = 300</li></ul></div>}
         />
       }
