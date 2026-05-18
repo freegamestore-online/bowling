@@ -1,5 +1,16 @@
-import { useRef, useEffect, useCallback } from "react";
-import * as BABYLON from "@babylonjs/core";
+import { useRef, useEffect } from "react";
+import { Engine } from "@babylonjs/core/Engines/engine";
+import { Scene } from "@babylonjs/core/scene";
+import { FreeCamera } from "@babylonjs/core/Cameras/freeCamera";
+import { Vector3, Quaternion } from "@babylonjs/core/Maths/math.vector";
+import { Color3, Color4 } from "@babylonjs/core/Maths/math.color";
+import { HemisphericLight } from "@babylonjs/core/Lights/hemisphericLight";
+import { DirectionalLight } from "@babylonjs/core/Lights/directionalLight";
+import { PointLight } from "@babylonjs/core/Lights/pointLight";
+import { ShadowGenerator } from "@babylonjs/core/Lights/Shadows/shadowGenerator";
+import { MeshBuilder } from "@babylonjs/core/Meshes/meshBuilder";
+import type { Mesh } from "@babylonjs/core/Meshes/mesh";
+import { StandardMaterial } from "@babylonjs/core/Materials/standardMaterial";
 
 interface GameProps {
   onScore: (score: number) => void;
@@ -11,14 +22,14 @@ interface GameProps {
 const PIN_SPACING = 0.9;
 const PIN_Z_START = -18;
 
-function getPinPositions(): BABYLON.Vector3[] {
-  const positions: BABYLON.Vector3[] = [];
+function getPinPositions(): Vector3[] {
+  const positions: Vector3[] = [];
   let id = 0;
   for (let row = 0; row < 4; row++) {
     const count = row + 1;
     const offsetX = -(count - 1) * PIN_SPACING * 0.5;
     for (let col = 0; col < count; col++) {
-      positions[id] = new BABYLON.Vector3(
+      positions[id] = new Vector3(
         offsetX + col * PIN_SPACING,
         0,
         PIN_Z_START - row * PIN_SPACING,
@@ -41,11 +52,17 @@ const PIN_CHAIN_DISTANCE = PIN_SPACING * 1.2;
 const TOTAL_FRAMES = 10;
 
 interface PinState {
-  mesh: BABYLON.Mesh;
+  mesh: Mesh;
   knocked: boolean;
   fallAngle: number;
-  fallAxis: BABYLON.Vector3;
-  originalPos: BABYLON.Vector3;
+  fallAxis: Vector3;
+  // Direction (in the xz plane) the pin's tip travels while falling.
+  // Precomputed at knock time so the per-frame animation does zero allocs.
+  fallTipX: number;
+  fallTipZ: number;
+  // Persistent quaternion reused each frame to avoid per-frame allocations.
+  quat: Quaternion;
+  originalPos: Vector3;
   knockDelay: number;
 }
 
@@ -96,7 +113,7 @@ type ThrowPhase = "aiming" | "power" | "rolling" | "settling" | "done";
 
 export function Game({ onScore, onGameOver, onStats }: GameProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const engineRef = useRef<BABYLON.Engine | null>(null);
+  const engineRef = useRef<Engine | null>(null);
   const onScoreRef = useRef(onScore);
   const onGameOverRef = useRef(onGameOver);
   const onStatsRef = useRef(onStats);
@@ -104,91 +121,93 @@ export function Game({ onScore, onGameOver, onStats }: GameProps) {
   onGameOverRef.current = onGameOver;
   onStatsRef.current = onStats;
 
-  const cleanup = useCallback(() => {
-    if (engineRef.current) {
-      engineRef.current.dispose();
-      engineRef.current = null;
-    }
-  }, []);
-
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
 
-    const engine = new BABYLON.Engine(canvas, true, {
-      preserveDrawingBuffer: true,
+    const engine = new Engine(canvas, true, {
+      // preserveDrawingBuffer was only needed for screenshot capture; off saves a copy each frame.
+      preserveDrawingBuffer: false,
       stencil: true,
     });
     engineRef.current = engine;
-    const scene = new BABYLON.Scene(engine);
-    scene.clearColor = new BABYLON.Color4(0.06, 0.09, 0.16, 1);
+    const scene = new Scene(engine);
+    scene.clearColor = new Color4(0.06, 0.09, 0.16, 1);
 
-    // ---- Camera: fixed behind ball, no user rotation ----
-    const camera = new BABYLON.FreeCamera(
-      "cam",
-      new BABYLON.Vector3(0, 6, 12),
-      scene,
-    );
-    camera.setTarget(new BABYLON.Vector3(0, 0, -10));
-    // Do NOT attach controls -- we control the camera ourselves
+    // ---- Camera: fixed behind ball, no user rotation, never moves ----
+    const camera = new FreeCamera("cam", new Vector3(0, 7, 13), scene);
+    camera.setTarget(new Vector3(0, 0, -10));
+    // Do NOT attach controls -- the camera is locked for the whole game
 
     // ---- Lighting ----
-    const hemi = new BABYLON.HemisphericLight(
-      "hemi",
-      new BABYLON.Vector3(0, 1, 0),
-      scene,
-    );
+    const hemi = new HemisphericLight("hemi", new Vector3(0, 1, 0), scene);
     hemi.intensity = 0.7;
-    hemi.groundColor = new BABYLON.Color3(0.15, 0.12, 0.1);
+    hemi.groundColor = new Color3(0.15, 0.12, 0.1);
 
-    const dir = new BABYLON.DirectionalLight(
+    const dir = new DirectionalLight(
       "dir",
-      new BABYLON.Vector3(-0.5, -2, -1).normalize(),
+      new Vector3(-0.5, -2, -1).normalize(),
       scene,
     );
     dir.intensity = 0.9;
-    dir.position = new BABYLON.Vector3(5, 12, 5);
+    dir.position = new Vector3(5, 12, 5);
+
+    const shadowGen = new ShadowGenerator(1024, dir);
+    shadowGen.useBlurExponentialShadowMap = true;
+    shadowGen.blurKernel = 32;
+    shadowGen.darkness = 0.5;
 
     // Subtle point light near pins for visibility
-    const pinSpot = new BABYLON.PointLight(
-      "pinSpot",
-      new BABYLON.Vector3(0, 5, PIN_Z_START),
+    const pinSpot = new PointLight("pinSpot", new Vector3(0, 5, PIN_Z_START), scene);
+    pinSpot.intensity = 0.5;
+    pinSpot.diffuse = new Color3(1, 0.95, 0.85);
+
+    // ---- Surrounding floor (so the lane doesn't float in the void) ----
+    const floor = MeshBuilder.CreateGround(
+      "floor",
+      { width: 60, height: 80 },
       scene,
     );
-    pinSpot.intensity = 0.5;
-    pinSpot.diffuse = new BABYLON.Color3(1, 0.95, 0.85);
+    floor.position.y = -0.15;
+    floor.position.z = -LANE_LENGTH / 2 + 5;
+    const floorMat = new StandardMaterial("floorMat", scene);
+    floorMat.diffuseColor = new Color3(0.12, 0.13, 0.18);
+    floorMat.specularColor = new Color3(0.05, 0.05, 0.05);
+    floor.material = floorMat;
+    floor.receiveShadows = true;
 
     // ---- Lane floor ----
-    const lane = BABYLON.MeshBuilder.CreateBox(
+    const lane = MeshBuilder.CreateBox(
       "lane",
       { width: LANE_WIDTH, height: 0.2, depth: LANE_LENGTH },
       scene,
     );
     lane.position.y = -0.1;
     lane.position.z = -LANE_LENGTH / 2 + 5;
-    const laneMat = new BABYLON.StandardMaterial("laneMat", scene);
-    laneMat.diffuseColor = new BABYLON.Color3(0.76, 0.6, 0.42);
-    laneMat.specularColor = new BABYLON.Color3(0.4, 0.35, 0.2);
+    const laneMat = new StandardMaterial("laneMat", scene);
+    laneMat.diffuseColor = new Color3(0.76, 0.6, 0.42);
+    laneMat.specularColor = new Color3(0.4, 0.35, 0.2);
     laneMat.specularPower = 64;
     lane.material = laneMat;
+    lane.receiveShadows = true;
 
     // Lane arrows (decorative guide marks)
     for (let i = -1; i <= 1; i++) {
-      const guide = BABYLON.MeshBuilder.CreateBox(
+      const guide = MeshBuilder.CreateBox(
         `guide${i}`,
         { width: 0.06, height: 0.01, depth: 1.5 },
         scene,
       );
       guide.position.set(i * 0.8, 0.01, 1);
-      const gMat = new BABYLON.StandardMaterial(`gMat${i}`, scene);
-      gMat.diffuseColor = new BABYLON.Color3(0.55, 0.4, 0.25);
+      const gMat = new StandardMaterial(`gMat${i}`, scene);
+      gMat.diffuseColor = new Color3(0.55, 0.4, 0.25);
       gMat.alpha = 0.5;
       guide.material = gMat;
     }
 
     // ---- Gutters ----
     for (const side of [-1, 1]) {
-      const gutter = BABYLON.MeshBuilder.CreateBox(
+      const gutter = MeshBuilder.CreateBox(
         "gutter",
         { width: 0.5, height: 0.15, depth: LANE_LENGTH },
         scene,
@@ -196,38 +215,38 @@ export function Game({ onScore, onGameOver, onStats }: GameProps) {
       gutter.position.x = side * (LANE_WIDTH / 2 + 0.25);
       gutter.position.y = -0.05;
       gutter.position.z = -LANE_LENGTH / 2 + 5;
-      const gutterMat = new BABYLON.StandardMaterial("gutterMat", scene);
-      gutterMat.diffuseColor = new BABYLON.Color3(0.25, 0.25, 0.3);
+      const gutterMat = new StandardMaterial("gutterMat", scene);
+      gutterMat.diffuseColor = new Color3(0.25, 0.25, 0.3);
       gutter.material = gutterMat;
     }
 
     // ---- Back wall ----
-    const backWall = BABYLON.MeshBuilder.CreateBox(
+    const backWall = MeshBuilder.CreateBox(
       "backWall",
       { width: LANE_WIDTH + 1, height: 2, depth: 0.3 },
       scene,
     );
     backWall.position.z = PIN_Z_START - 3.5;
     backWall.position.y = 1;
-    const wallMat = new BABYLON.StandardMaterial("wallMat", scene);
-    wallMat.diffuseColor = new BABYLON.Color3(0.2, 0.2, 0.25);
+    const wallMat = new StandardMaterial("wallMat", scene);
+    wallMat.diffuseColor = new Color3(0.2, 0.2, 0.25);
     backWall.material = wallMat;
 
     // ---- Pin materials ----
-    const pinMat = new BABYLON.StandardMaterial("pinMat", scene);
-    pinMat.diffuseColor = new BABYLON.Color3(0.97, 0.97, 0.92);
-    pinMat.specularColor = new BABYLON.Color3(0.6, 0.6, 0.6);
+    const pinMat = new StandardMaterial("pinMat", scene);
+    pinMat.diffuseColor = new Color3(0.97, 0.97, 0.92);
+    pinMat.specularColor = new Color3(0.6, 0.6, 0.6);
     pinMat.specularPower = 32;
 
-    const pinRedMat = new BABYLON.StandardMaterial("pinRedMat", scene);
-    pinRedMat.diffuseColor = new BABYLON.Color3(0.85, 0.15, 0.15);
+    const pinRedMat = new StandardMaterial("pinRedMat", scene);
+    pinRedMat.diffuseColor = new Color3(0.85, 0.15, 0.15);
 
     // ---- Create pins ----
     function createPins(): PinState[] {
       const pins: PinState[] = [];
       for (let i = 0; i < 10; i++) {
         const pos = PIN_POSITIONS[i]!;
-        const body = BABYLON.MeshBuilder.CreateCylinder(
+        const body = MeshBuilder.CreateCylinder(
           `pin${i}`,
           {
             height: PIN_HEIGHT,
@@ -240,9 +259,10 @@ export function Game({ onScore, onGameOver, onStats }: GameProps) {
         body.position = pos.clone();
         body.position.y = PIN_HEIGHT / 2;
         body.material = pinMat;
+        shadowGen.addShadowCaster(body, true);
 
         // Red stripe
-        const stripe = BABYLON.MeshBuilder.CreateCylinder(
+        const stripe = MeshBuilder.CreateCylinder(
           `stripe${i}`,
           { height: 0.12, diameter: PIN_RADIUS * 2.3, tessellation: 12 },
           scene,
@@ -255,7 +275,10 @@ export function Game({ onScore, onGameOver, onStats }: GameProps) {
           mesh: body,
           knocked: false,
           fallAngle: 0,
-          fallAxis: BABYLON.Vector3.Right(),
+          fallAxis: Vector3.Right(),
+          fallTipX: 0,
+          fallTipZ: 0,
+          quat: new Quaternion(),
           originalPos: pos.clone(),
           knockDelay: 0,
         });
@@ -265,21 +288,38 @@ export function Game({ onScore, onGameOver, onStats }: GameProps) {
 
     let pins = createPins();
 
+    // Knock a pin and lock in its fall direction.
+    // `axisX, axisZ` is the rotation axis in the xz-plane (y is always 0, so the
+    // pin tips horizontally). The tip travels along (axisZ, -axisX) — the cross
+    // of world-up with the axis. Both are pre-normalized here so no per-frame
+    // sqrt or Vector3 allocation is needed inside the render loop.
+    function setPinFall(p: PinState, axisX: number, axisZ: number) {
+      const mag = Math.hypot(axisX, axisZ) || 1;
+      const ax = axisX / mag;
+      const az = axisZ / mag;
+      p.fallAxis.set(ax, 0, az);
+      p.fallTipX = az;
+      p.fallTipZ = -ax;
+      p.fallAngle = 0;
+      p.knocked = true;
+    }
+
     // ---- Ball ----
-    const ball = BABYLON.MeshBuilder.CreateSphere(
+    const ball = MeshBuilder.CreateSphere(
       "ball",
-      { diameter: BALL_RADIUS * 2, segments: 24 },
+      { diameter: BALL_RADIUS * 2, segments: 16 },
       scene,
     );
-    const ballMat = new BABYLON.StandardMaterial("ballMat", scene);
-    ballMat.diffuseColor = new BABYLON.Color3(0.15, 0.08, 0.55);
-    ballMat.specularColor = new BABYLON.Color3(0.6, 0.6, 0.8);
+    const ballMat = new StandardMaterial("ballMat", scene);
+    ballMat.diffuseColor = new Color3(0.15, 0.08, 0.55);
+    ballMat.specularColor = new Color3(0.6, 0.6, 0.8);
     ballMat.specularPower = 64;
     ball.material = ballMat;
+    shadowGen.addShadowCaster(ball);
 
     // Finger holes
     for (let h = 0; h < 3; h++) {
-      const hole = BABYLON.MeshBuilder.CreateCylinder(
+      const hole = MeshBuilder.CreateCylinder(
         `hole${h}`,
         { height: 0.08, diameter: 0.09, tessellation: 8 },
         scene,
@@ -291,25 +331,25 @@ export function Game({ onScore, onGameOver, onStats }: GameProps) {
         BALL_RADIUS - 0.02,
         Math.cos(angle) * 0.2,
       );
-      const holeMat = new BABYLON.StandardMaterial(`holeMat${h}`, scene);
-      holeMat.diffuseColor = new BABYLON.Color3(0.02, 0.02, 0.08);
+      const holeMat = new StandardMaterial(`holeMat${h}`, scene);
+      holeMat.diffuseColor = new Color3(0.02, 0.02, 0.08);
       hole.material = holeMat;
     }
 
     // ---- Aiming arrow (3D indicator on lane) ----
-    const arrow = BABYLON.MeshBuilder.CreateBox(
+    const arrow = MeshBuilder.CreateBox(
       "arrow",
       { width: 0.1, height: 0.02, depth: 2.5 },
       scene,
     );
-    const arrowMat = new BABYLON.StandardMaterial("arrowMat", scene);
-    arrowMat.diffuseColor = new BABYLON.Color3(1, 0.35, 0.35);
-    arrowMat.emissiveColor = new BABYLON.Color3(0.6, 0.15, 0.15);
+    const arrowMat = new StandardMaterial("arrowMat", scene);
+    arrowMat.diffuseColor = new Color3(1, 0.35, 0.35);
+    arrowMat.emissiveColor = new Color3(0.6, 0.15, 0.15);
     arrowMat.alpha = 0.8;
     arrow.material = arrowMat;
 
     // Arrow head (triangle)
-    const arrowHead = BABYLON.MeshBuilder.CreateCylinder(
+    const arrowHead = MeshBuilder.CreateCylinder(
       "arrowHead",
       { height: 0.02, diameterTop: 0, diameterBottom: 0.5, tessellation: 3 },
       scene,
@@ -350,13 +390,19 @@ export function Game({ onScore, onGameOver, onStats }: GameProps) {
     hudDiv.appendChild(instrLabel);
 
     // Power meter (screen overlay bar)
+    // Wrapper holds the label outside the clipping bar
+    const powerWrap = document.createElement("div");
+    powerWrap.style.cssText =
+      "position:absolute;left:16px;top:50%;transform:translateY(-50%);" +
+      "display:none;flex-direction:column;align-items:center;gap:6px;";
+    hudDiv.appendChild(powerWrap);
+
     const powerContainer = document.createElement("div");
     powerContainer.style.cssText =
-      "position:absolute;left:16px;top:50%;transform:translateY(-50%);" +
-      "width:28px;height:200px;border-radius:14px;overflow:hidden;" +
-      "background:rgba(0,0,0,0.4);border:2px solid rgba(255,255,255,0.25);" +
-      "backdrop-filter:blur(4px);display:none;";
-    hudDiv.appendChild(powerContainer);
+      "position:relative;width:28px;height:200px;border-radius:14px;" +
+      "overflow:hidden;background:rgba(0,0,0,0.4);" +
+      "border:2px solid rgba(255,255,255,0.25);backdrop-filter:blur(4px);";
+    powerWrap.appendChild(powerContainer);
 
     const powerFillDiv = document.createElement("div");
     powerFillDiv.style.cssText =
@@ -366,11 +412,10 @@ export function Game({ onScore, onGameOver, onStats }: GameProps) {
 
     const powerLabel = document.createElement("div");
     powerLabel.style.cssText =
-      "position:absolute;bottom:-24px;left:50%;transform:translateX(-50%);" +
       "font-family:Manrope,sans-serif;font-size:11px;font-weight:600;" +
-      "color:rgba(255,255,255,0.7);white-space:nowrap;";
+      "color:rgba(255,255,255,0.7);white-space:nowrap;letter-spacing:0.05em;";
     powerLabel.textContent = "POWER";
-    powerContainer.appendChild(powerLabel);
+    powerWrap.appendChild(powerLabel);
 
     // Strike/spare overlay
     const bigLabel = document.createElement("div");
@@ -381,13 +426,16 @@ export function Game({ onScore, onGameOver, onStats }: GameProps) {
       "pointer-events:none;transition:transform 0.3s ease-out,opacity 0.5s;opacity:0;";
     hudDiv.appendChild(bigLabel);
 
+    let bigLabelTimer: ReturnType<typeof setTimeout> | null = null;
     function showBigLabel(text: string) {
       bigLabel.textContent = text;
       bigLabel.style.transform = "translate(-50%,-50%) scale(1)";
       bigLabel.style.opacity = "1";
-      setTimeout(() => {
+      if (bigLabelTimer !== null) clearTimeout(bigLabelTimer);
+      bigLabelTimer = setTimeout(() => {
         bigLabel.style.transform = "translate(-50%,-50%) scale(1.2)";
         bigLabel.style.opacity = "0";
+        bigLabelTimer = null;
       }, 800);
     }
 
@@ -422,7 +470,7 @@ export function Game({ onScore, onGameOver, onStats }: GameProps) {
           instrLabel.textContent = "Drag left/right or use arrow keys to aim. Tap / Space to set.";
           instrLabel.style.opacity = "1";
         }
-        powerContainer.style.display = "none";
+        powerWrap.style.display = "none";
       } else if (throwPhase === "power") {
         phaseLabel.textContent = "SET POWER";
         phaseLabel.style.opacity = "1";
@@ -430,17 +478,17 @@ export function Game({ onScore, onGameOver, onStats }: GameProps) {
           instrLabel.textContent = "Tap / Space to throw!";
           instrLabel.style.opacity = "1";
         }
-        powerContainer.style.display = "block";
+        powerWrap.style.display = "flex";
       } else if (throwPhase === "rolling") {
         phaseLabel.textContent = "";
         phaseLabel.style.opacity = "0";
         instrLabel.style.opacity = "0";
-        powerContainer.style.display = "none";
+        powerWrap.style.display = "none";
       } else if (throwPhase === "settling") {
         phaseLabel.textContent = "";
         phaseLabel.style.opacity = "0";
         instrLabel.style.opacity = "0";
-        powerContainer.style.display = "none";
+        powerWrap.style.display = "none";
       }
     }
 
@@ -449,7 +497,7 @@ export function Game({ onScore, onGameOver, onStats }: GameProps) {
       ballX = 0;
       ballVx = 0;
       ball.position.set(0, BALL_RADIUS, ballStartZ);
-      ball.rotation = BABYLON.Vector3.Zero();
+      ball.rotation.set(0, 0, 0);
       ball.isVisible = true;
     }
 
@@ -465,10 +513,9 @@ export function Game({ onScore, onGameOver, onStats }: GameProps) {
       for (let i = 0; i < pins.length; i++) {
         const p = pins[i]!;
         if (!p.knocked) {
-          p.mesh.position = p.originalPos.clone();
-          p.mesh.position.y = PIN_HEIGHT / 2;
-          p.mesh.rotation = BABYLON.Vector3.Zero();
           p.mesh.rotationQuaternion = null;
+          p.mesh.rotation.set(0, 0, 0);
+          p.mesh.position.set(p.originalPos.x, PIN_HEIGHT / 2, p.originalPos.z);
           p.fallAngle = 0;
         }
       }
@@ -478,7 +525,7 @@ export function Game({ onScore, onGameOver, onStats }: GameProps) {
     function hideKnockedPins() {
       for (const p of pins) {
         if (p.knocked) {
-          p.mesh.isVisible = false;
+          p.mesh.setEnabled(false);
         }
       }
     }
@@ -486,7 +533,6 @@ export function Game({ onScore, onGameOver, onStats }: GameProps) {
     function updateScore() {
       const total = computeTotalScore(frames);
       onScoreRef.current(total);
-      onStatsRef.current?.({ frame: Math.min(currentFrame + 1, 10) });
     }
 
     function startAiming() {
@@ -495,12 +541,8 @@ export function Game({ onScore, onGameOver, onStats }: GameProps) {
       power = 0;
       powerDir = 1;
       resetBallPosition();
-
-      // Camera behind ball looking down the lane
-      camera.position = new BABYLON.Vector3(0, 6, 12);
-      camera.setTarget(new BABYLON.Vector3(0, 0, -10));
-
       arrow.isVisible = true;
+      onStatsRef.current?.({ frame: Math.min(currentFrame + 1, 10) });
       updateHUD();
     }
 
@@ -658,7 +700,6 @@ export function Game({ onScore, onGameOver, onStats }: GameProps) {
     canvas.addEventListener("pointerup", handlePointerUp);
 
     // ---- Main loop ----
-    onStatsRef.current?.({ frame: 1 });
     startAiming();
 
     scene.registerBeforeRender(() => {
@@ -725,18 +766,6 @@ export function Game({ onScore, onGameOver, onStats }: GameProps) {
         // Roll rotation
         ball.rotation.x -= speed * dt / BALL_RADIUS;
 
-        // Smooth camera follow: ease toward ball
-        const targetCamZ = Math.max(ballZ + 8, 4);
-        camera.position.z += (targetCamZ - camera.position.z) * 3 * dt;
-        camera.position.y += (4 - camera.position.y) * 2 * dt;
-        camera.setTarget(
-          new BABYLON.Vector3(
-            ballX * 0.3,
-            0,
-            Math.min(ballZ - 6, PIN_Z_START),
-          ),
-        );
-
         // Pin collisions
         let hitAny = false;
         for (let i = 0; i < pins.length; i++) {
@@ -746,17 +775,11 @@ export function Game({ onScore, onGameOver, onStats }: GameProps) {
           const dz = ballZ - p.originalPos.z;
           const dist = Math.sqrt(dx * dx + dz * dz);
           if (dist < KNOCK_DISTANCE) {
-            p.knocked = true;
-            p.knockDelay = 0;
-            hitAny = true;
             const fallDirX = dx !== 0 ? -dx : Math.random() - 0.5;
             const fallDirZ = dz !== 0 ? -dz : -1;
-            p.fallAxis = new BABYLON.Vector3(
-              fallDirZ,
-              0,
-              -fallDirX,
-            ).normalize();
-            p.fallAngle = 0;
+            setPinFall(p, fallDirZ, -fallDirX);
+            p.knockDelay = 0;
+            hitAny = true;
 
             // Chain reaction: knock nearby standing pins
             for (let j = 0; j < pins.length; j++) {
@@ -769,16 +792,10 @@ export function Game({ onScore, onGameOver, onStats }: GameProps) {
                 const dot = px * dx + pz * dz;
                 if (dot < 0.1) {
                   // Knock with a small delay for cascade effect
-                  pins[j]!.knocked = true;
-                  pins[j]!.knockDelay = 0.08 + Math.random() * 0.06;
                   const rndX = px + (Math.random() - 0.5) * 0.2;
                   const rndZ = pz + (Math.random() - 0.5) * 0.2;
-                  pins[j]!.fallAxis = new BABYLON.Vector3(
-                    -rndZ,
-                    0,
-                    rndX,
-                  ).normalize();
-                  pins[j]!.fallAngle = 0;
+                  setPinFall(pins[j]!, -rndZ, rndX);
+                  pins[j]!.knockDelay = 0.08 + Math.random() * 0.06;
                 }
               }
             }
@@ -806,8 +823,9 @@ export function Game({ onScore, onGameOver, onStats }: GameProps) {
         }
       }
 
-      // Animate falling pins
-      for (const p of pins) {
+      // Animate falling pins — hot path, no allocations.
+      for (let i = 0; i < pins.length; i++) {
+        const p = pins[i]!;
         if (!p.knocked) continue;
 
         // Handle knock delay for chain reactions
@@ -818,21 +836,18 @@ export function Game({ onScore, onGameOver, onStats }: GameProps) {
 
         if (p.fallAngle < Math.PI / 2) {
           p.fallAngle = Math.min(Math.PI / 2, p.fallAngle + dt * 6);
-          const quat = BABYLON.Quaternion.RotationAxis(
-            p.fallAxis,
-            p.fallAngle,
-          );
-          p.mesh.rotationQuaternion = quat;
-          // Tip from base
+          Quaternion.RotationAxisToRef(p.fallAxis, p.fallAngle, p.quat);
+          p.mesh.rotationQuaternion = p.quat;
+          // Pin tips around its base; precomputed tip direction → 0 allocs/frame.
+          const cosA = Math.cos(p.fallAngle);
+          const sinA = Math.sin(p.fallAngle);
+          const tipOffset = (PIN_HEIGHT / 2) * sinA;
+          p.mesh.position.x = p.originalPos.x + p.fallTipX * tipOffset;
+          p.mesh.position.z = p.originalPos.z + p.fallTipZ * tipOffset;
+          // When the pin is fully tipped (cosA→0) it lies on its side, so its
+          // center needs to stay ~PIN_RADIUS above the lane or it clips in.
           p.mesh.position.y =
-            p.originalPos.y + (PIN_HEIGHT / 2) * Math.cos(p.fallAngle);
-          const tipOffset = (PIN_HEIGHT / 2) * Math.sin(p.fallAngle);
-          const cross = BABYLON.Vector3.Cross(
-            BABYLON.Vector3.Up(),
-            p.fallAxis,
-          ).normalize();
-          p.mesh.position.x = p.originalPos.x + cross.x * tipOffset;
-          p.mesh.position.z = p.originalPos.z + cross.z * tipOffset;
+            p.originalPos.y + (PIN_HEIGHT / 2) * cosA + PIN_RADIUS * 1.2 * sinA;
         }
       }
     });
@@ -847,11 +862,13 @@ export function Game({ onScore, onGameOver, onStats }: GameProps) {
       canvas.removeEventListener("pointermove", handlePointerMove);
       canvas.removeEventListener("pointerup", handlePointerUp);
       window.removeEventListener("resize", onResize);
+      if (bigLabelTimer !== null) clearTimeout(bigLabelTimer);
       // Clean up HUD
       hudDiv.remove();
       engine.dispose();
+      engineRef.current = null;
     };
-  }, [cleanup]);
+  }, []);
 
   return (
     <canvas
