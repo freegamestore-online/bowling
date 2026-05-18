@@ -246,7 +246,7 @@ export function Game({ onScore, onGameOver, onStats }: GameProps) {
       const pins: PinState[] = [];
       for (let i = 0; i < 10; i++) {
         const pos = PIN_POSITIONS[i]!;
-        const body = MeshBuilder.CreateCylinder(
+        const pinBody = MeshBuilder.CreateCylinder(
           `pin${i}`,
           {
             height: PIN_HEIGHT,
@@ -256,10 +256,10 @@ export function Game({ onScore, onGameOver, onStats }: GameProps) {
           },
           scene,
         );
-        body.position = pos.clone();
-        body.position.y = PIN_HEIGHT / 2;
-        body.material = pinMat;
-        shadowGen.addShadowCaster(body, true);
+        pinBody.position = pos.clone();
+        pinBody.position.y = PIN_HEIGHT / 2;
+        pinBody.material = pinMat;
+        shadowGen.addShadowCaster(pinBody, true);
 
         // Red stripe
         const stripe = MeshBuilder.CreateCylinder(
@@ -267,12 +267,12 @@ export function Game({ onScore, onGameOver, onStats }: GameProps) {
           { height: 0.12, diameter: PIN_RADIUS * 2.3, tessellation: 12 },
           scene,
         );
-        stripe.parent = body;
+        stripe.parent = pinBody;
         stripe.position.y = 0.15;
         stripe.material = pinRedMat;
 
         pins.push({
-          mesh: body,
+          mesh: pinBody,
           knocked: false,
           fallAngle: 0,
           fallAxis: Vector3.Right(),
@@ -530,6 +530,17 @@ export function Game({ onScore, onGameOver, onStats }: GameProps) {
       }
     }
 
+    // Set up the next throw. resetAll=true for a fresh rack (strike, new
+    // frame, bonus throw); false to keep already-knocked pins down.
+    function nextThrow(resetAll: boolean) {
+      if (resetAll) resetAllPins();
+      else {
+        hideKnockedPins();
+        resetStandingPins();
+      }
+      startAiming();
+    }
+
     function updateScore() {
       const total = computeTotalScore(frames);
       onScoreRef.current(total);
@@ -595,44 +606,24 @@ export function Game({ onScore, onGameOver, onStats }: GameProps) {
             onGameOverRef.current();
             return;
           }
-          resetAllPins();
-          startAiming();
+          nextThrow(true);
         } else {
           currentThrow = 1;
-          hideKnockedPins();
-          resetStandingPins();
-          startAiming();
+          nextThrow(false);
         }
       } else {
         // 10th frame
         if (currentThrow === 0) {
-          if (isStrike) {
-            currentThrow = 1;
-            resetAllPins();
-            startAiming();
-          } else {
-            currentThrow = 1;
-            hideKnockedPins();
-            resetStandingPins();
-            startAiming();
-          }
+          currentThrow = 1;
+          nextThrow(isStrike);
         } else if (currentThrow === 1) {
           const firstThrow = frame.throws[0] ?? 0;
           if (firstThrow === 10) {
-            if (newlyKnocked === 10) {
-              currentThrow = 2;
-              resetAllPins();
-              startAiming();
-            } else {
-              currentThrow = 2;
-              hideKnockedPins();
-              resetStandingPins();
-              startAiming();
-            }
+            currentThrow = 2;
+            nextThrow(newlyKnocked === 10);
           } else if (isSpare) {
             currentThrow = 2;
-            resetAllPins();
-            startAiming();
+            nextThrow(true);
           } else {
             onGameOverRef.current();
             return;

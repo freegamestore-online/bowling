@@ -3,7 +3,12 @@
   "private": true,
   "packageManager": "pnpm@10.30.3",
   "engines": { "node": ">=22" },
-  "pnpm": { "onlyBuiltDependencies": ["esbuild"] },
+  "pnpm": {
+    "onlyBuiltDependencies": ["esbuild"],
+    "overrides": {
+      "brace-expansion@>=5.0.0 <5.0.6": ">=5.0.6"
+    }
+  },
   "scripts": {
     "dev": "pnpm --filter @bowling/web dev",
     "build": "pnpm --filter @bowling/web build",
