@@ -348,15 +348,18 @@ export function Game({ onScore, onGameOver, onStats }: GameProps) {
     arrowMat.alpha = 0.8;
     arrow.material = arrowMat;
 
-    // Arrow head (triangle)
+    // Arrow head: a flat triangle on the lane with its apex pointing along -z
+    // (toward the pins). Babylon's cylinder is Y-aligned, so we lay it on its
+    // side (rotation.x = -π/2) and then rotate around the now-Z axis by π/2
+    // so the cone's apex (originally on +Y) ends up at -Z.
     const arrowHead = MeshBuilder.CreateCylinder(
       "arrowHead",
-      { height: 0.02, diameterTop: 0, diameterBottom: 0.5, tessellation: 3 },
+      { height: 0.5, diameterTop: 0, diameterBottom: 0.3, tessellation: 3 },
       scene,
     );
     arrowHead.parent = arrow;
-    arrowHead.position.z = -1.5;
-    arrowHead.rotation.y = Math.PI;
+    arrowHead.position.z = -1.4;
+    arrowHead.rotation.x = -Math.PI / 2;
     arrowHead.material = arrowMat;
 
     // ---- HUD: 2D overlay using AdvancedDynamicTexture ----
@@ -365,7 +368,7 @@ export function Game({ onScore, onGameOver, onStats }: GameProps) {
     const hudDiv = document.createElement("div");
     hudDiv.style.cssText =
       "position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none;z-index:10;";
-    canvas.parentElement!.appendChild(hudDiv);
+    canvas.parentElement?.appendChild(hudDiv);
 
     // Phase label
     const phaseLabel = document.createElement("div");

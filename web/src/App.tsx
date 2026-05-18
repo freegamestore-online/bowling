@@ -6,8 +6,24 @@ import type { GamePhase } from "./types";
 const BEST_SCORE_KEY = "freebowling-best";
 
 function getBestScore(): number {
-  const v = localStorage.getItem(BEST_SCORE_KEY);
-  return v ? parseInt(v, 10) : 0;
+  try {
+    const v = localStorage.getItem(BEST_SCORE_KEY);
+    if (!v) return 0;
+    const n = parseInt(v, 10);
+    return Number.isFinite(n) && n >= 0 ? n : 0;
+  } catch {
+    // localStorage can be disabled or throw on access in some browsers
+    // (Safari Private, locked-down embeds). Treat as "no best score yet".
+    return 0;
+  }
+}
+
+function trySetBestScore(value: number) {
+  try {
+    localStorage.setItem(BEST_SCORE_KEY, String(value));
+  } catch {
+    // Safari Private throws QuotaExceededError on setItem. Ignore.
+  }
 }
 
 export default function App() {
@@ -31,7 +47,7 @@ export default function App() {
     const final = scoreRef.current;
     const best = getBestScore();
     if (final > best) {
-      localStorage.setItem(BEST_SCORE_KEY, String(final));
+      trySetBestScore(final);
       setBestScore(final);
     }
     setPhase("over");
