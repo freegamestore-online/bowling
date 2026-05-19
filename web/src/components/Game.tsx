@@ -11,6 +11,8 @@ import { ShadowGenerator } from "@babylonjs/core/Lights/Shadows/shadowGenerator"
 import { MeshBuilder } from "@babylonjs/core/Meshes/meshBuilder";
 import type { Mesh } from "@babylonjs/core/Meshes/mesh";
 import { StandardMaterial } from "@babylonjs/core/Materials/standardMaterial";
+import { DynamicTexture } from "@babylonjs/core/Materials/Textures/dynamicTexture";
+import { SoundFX } from "../sound";
 
 interface GameProps {
   onScore: (score: number) => void;
@@ -111,6 +113,41 @@ function computeTotalScore(frames: FrameScore[]): number {
 
 type ThrowPhase = "aiming" | "power" | "rolling" | "settling" | "done";
 
+// Procedural wood-grain texture for the lane. Eight vertical planks with
+// a subtle grain speckle. Painted once into a DynamicTexture so the
+// material has real visual detail without shipping an image asset.
+function createWoodTexture(scene: Scene): DynamicTexture {
+  const size = 256;
+  const tex = new DynamicTexture("laneTex", size, scene, true);
+  const c = tex.getContext() as unknown as CanvasRenderingContext2D;
+
+  // Base wood color, slightly mottled by a vertical gradient
+  const grad = c.createLinearGradient(0, 0, size, 0);
+  grad.addColorStop(0, "#a07b48");
+  grad.addColorStop(0.5, "#b3884f");
+  grad.addColorStop(1, "#9d7644");
+  c.fillStyle = grad;
+  c.fillRect(0, 0, size, size);
+
+  // Plank seams (vertical dark lines across the lane width)
+  c.fillStyle = "rgba(20,10,0,0.55)";
+  for (let i = 1; i < 8; i++) {
+    const x = Math.round((i / 8) * size);
+    c.fillRect(x, 0, 1, size);
+  }
+
+  // Grain speckle: short dark streaks distributed along plank length
+  for (let i = 0; i < 4200; i++) {
+    const x = Math.random() * size;
+    const y = Math.random() * size;
+    c.fillStyle = `rgba(40,20,5,${Math.random() * 0.18})`;
+    c.fillRect(x, y, 1, 1 + Math.random() * 3);
+  }
+
+  tex.update();
+  return tex;
+}
+
 export function Game({ onScore, onGameOver, onStats }: GameProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const engineRef = useRef<Engine | null>(null);
@@ -185,9 +222,11 @@ export function Game({ onScore, onGameOver, onStats }: GameProps) {
     lane.position.y = -0.1;
     lane.position.z = -LANE_LENGTH / 2 + 5;
     const laneMat = new StandardMaterial("laneMat", scene);
-    laneMat.diffuseColor = new Color3(0.76, 0.6, 0.42);
-    laneMat.specularColor = new Color3(0.4, 0.35, 0.2);
-    laneMat.specularPower = 64;
+    laneMat.diffuseTexture = createWoodTexture(scene);
+    // V repeats along the lane length so plank seams look long & thin.
+    (laneMat.diffuseTexture as DynamicTexture).vScale = 6;
+    laneMat.specularColor = new Color3(0.35, 0.3, 0.18);
+    laneMat.specularPower = 96;
     lane.material = laneMat;
     lane.receiveShadows = true;
 
@@ -454,6 +493,7 @@ export function Game({ onScore, onGameOver, onStats }: GameProps) {
     let ballZ = ballStartZ;
     let ballX = 0;
     let ballVx = 0;
+    let guttered = false;
     let settleTimer = 0;
     let instrFadeTimer = 0;
     let showInstr = true;
@@ -464,6 +504,9 @@ export function Game({ onScore, onGameOver, onStats }: GameProps) {
     for (let i = 0; i < 10; i++) {
       frames.push({ throws: [], pinsDown: [] });
     }
+
+    const sfx = new SoundFX();
+    const GUTTER_EDGE = LANE_WIDTH / 2 - BALL_RADIUS;
 
     function updateHUD() {
       if (throwPhase === "aiming") {
@@ -573,8 +616,11 @@ export function Game({ onScore, onGameOver, onStats }: GameProps) {
       ballX = aimX;
       ballZ = ballStartZ;
       ballVx = aimX * -0.3;
+      guttered = false;
       ball.position.x = ballX;
       ball.position.z = ballZ;
+      ball.position.y = BALL_RADIUS;
+      sfx.startRoll();
 
       // Fade out instructions after first throw
       instrFadeTimer = 3;
@@ -598,8 +644,15 @@ export function Game({ onScore, onGameOver, onStats }: GameProps) {
       const totalDown = frame.throws.reduce((a, b) => a + b, 0);
       const isSpare = currentThrow === 1 && totalDown >= 10;
 
-      if (isStrike) showBigLabel("STRIKE!");
-      else if (isSpare) showBigLabel("SPARE!");
+      if (isStrike) {
+        showBigLabel("STRIKE!");
+        sfx.strike();
+      } else if (isSpare) {
+        showBigLabel("SPARE!");
+        sfx.spare();
+      } else if (newlyKnocked === 0 && guttered) {
+        showBigLabel("GUTTER");
+      }
 
       if (currentFrame < 9) {
         if (isStrike || currentThrow === 1) {
@@ -747,22 +800,29 @@ export function Game({ onScore, onGameOver, onStats }: GameProps) {
         ballZ -= speed * dt;
         ballX += ballVx * dt;
 
-        // Clamp to lane
-        ballX = Math.max(
-          -LANE_WIDTH / 2 + BALL_RADIUS,
-          Math.min(LANE_WIDTH / 2 - BALL_RADIUS, ballX),
-        );
+        // Gutter: once the ball reaches the lane edge it falls into the
+        // gutter, glides forward there, and skips the pin collision check.
+        if (!guttered && Math.abs(ballX) > GUTTER_EDGE) {
+          guttered = true;
+          ballVx = 0;
+          sfx.gutter();
+        }
+        if (guttered) {
+          ballX = Math.sign(ballX) * (LANE_WIDTH / 2 + 0.25);
+          ball.position.y = -0.05;
+        } else {
+          ball.position.y = BALL_RADIUS;
+        }
 
         ball.position.x = ballX;
         ball.position.z = ballZ;
-        ball.position.y = BALL_RADIUS;
 
         // Roll rotation
         ball.rotation.x -= speed * dt / BALL_RADIUS;
 
-        // Pin collisions
+        // Pin collisions — skipped entirely while in the gutter.
         let hitAny = false;
-        for (let i = 0; i < pins.length; i++) {
+        if (!guttered) for (let i = 0; i < pins.length; i++) {
           const p = pins[i]!;
           if (p.knocked) continue;
           const dx = ballX - p.originalPos.x;
@@ -773,6 +833,9 @@ export function Game({ onScore, onGameOver, onStats }: GameProps) {
             const fallDirZ = dz !== 0 ? -dz : -1;
             setPinFall(p, fallDirZ, -fallDirX);
             p.knockDelay = 0;
+            // Loud thud on the ball's direct hit; the cascade pins get
+            // softer clatter slightly later.
+            sfx.pinHit(hitAny ? 0.6 : 1);
             hitAny = true;
 
             // Chain reaction: knock nearby standing pins
@@ -805,6 +868,7 @@ export function Game({ onScore, onGameOver, onStats }: GameProps) {
           throwPhase = "settling";
           settleTimer = 0;
           ball.isVisible = false;
+          sfx.stopRoll();
           updateHUD();
         }
       }
@@ -857,6 +921,7 @@ export function Game({ onScore, onGameOver, onStats }: GameProps) {
       canvas.removeEventListener("pointerup", handlePointerUp);
       window.removeEventListener("resize", onResize);
       if (bigLabelTimer !== null) clearTimeout(bigLabelTimer);
+      sfx.dispose();
       // Clean up HUD
       hudDiv.remove();
       engine.dispose();
