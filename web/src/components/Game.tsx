@@ -877,9 +877,11 @@ export function Game({ onScore, onGameOver, onStats }: GameProps) {
           throwBall();
         }
       } else if (e.key === "ArrowLeft" && throwPhase === "aiming") {
-        aimX = Math.max(-LANE_WIDTH / 2 + 0.5, aimX - 0.15);
-      } else if (e.key === "ArrowRight" && throwPhase === "aiming") {
+        // Camera-left is +X in Babylon's left-handed coords with the camera
+        // looking down -Z, so Left = aimX += and Right = aimX -=.
         aimX = Math.min(LANE_WIDTH / 2 - 0.5, aimX + 0.15);
+      } else if (e.key === "ArrowRight" && throwPhase === "aiming") {
+        aimX = Math.max(-LANE_WIDTH / 2 + 0.5, aimX - 0.15);
       } else if (e.key === "ArrowLeft" && throwPhase === "spin") {
         spin = Math.max(-1, spin - 0.1);
       } else if (e.key === "ArrowRight" && throwPhase === "spin") {
@@ -904,7 +906,11 @@ export function Game({ onScore, onGameOver, onStats }: GameProps) {
     const handlePointerMove = (e: PointerEvent) => {
       if (!pointerDown) return;
       if (throwPhase === "aiming") {
-        const dx = (e.clientX - pointerStartX) * 0.015;
+        // Negative dx maps dragging right (positive pointer delta) to the
+        // ball moving camera-right (-X in Babylon's left-handed coords with
+        // the camera looking down -Z). This matches the spin slider's
+        // direction so all controls feel consistent.
+        const dx = (e.clientX - pointerStartX) * -0.015;
         aimX = Math.max(
           -LANE_WIDTH / 2 + 0.5,
           Math.min(LANE_WIDTH / 2 - 0.5, aimXAtPointerStart + dx),
