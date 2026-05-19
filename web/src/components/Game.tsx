@@ -1,4 +1,5 @@
 import { useRef, useEffect } from "react";
+import { useSound } from "@freegamestore/games";
 import { Engine } from "@babylonjs/core/Engines/engine";
 import { Scene } from "@babylonjs/core/scene";
 import { FreeCamera } from "@babylonjs/core/Cameras/freeCamera";
@@ -152,14 +153,23 @@ function createWoodTexture(scene: Scene): DynamicTexture {
 }
 
 export function Game({ onScore, onGameOver, onStats }: GameProps) {
+  // Pulls from the SoundProvider that GameShell wraps around its children.
+  // Gates the SoundFX class's playback so the topbar Mute button works.
+  const { muted } = useSound();
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const engineRef = useRef<Engine | null>(null);
+  const sfxRef = useRef<SoundFX | null>(null);
   const onScoreRef = useRef(onScore);
   const onGameOverRef = useRef(onGameOver);
   const onStatsRef = useRef(onStats);
   onScoreRef.current = onScore;
   onGameOverRef.current = onGameOver;
   onStatsRef.current = onStats;
+
+  // Forward platform mute state into SoundFX whenever it changes.
+  useEffect(() => {
+    sfxRef.current?.setMuted(muted);
+  }, [muted]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -509,6 +519,9 @@ export function Game({ onScore, onGameOver, onStats }: GameProps) {
     }
 
     const sfx = new SoundFX();
+    // Initial mute state is synced by the [muted] effect that runs right
+    // after this engine-setup effect completes; SoundFX defaults to muted.
+    sfxRef.current = sfx;
     const GUTTER_EDGE = LANE_WIDTH / 2 - BALL_RADIUS;
 
     function updateHUD() {

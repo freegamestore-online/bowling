@@ -7,8 +7,22 @@ export class SoundFX {
   private ctx: AudioContext | null = null;
   private rollSource: AudioBufferSourceNode | null = null;
   private rollGain: GainNode | null = null;
+  // Default to muted — matches the SDK's "muted by default" semantics so
+  // we never play a sound before React has had a chance to sync state.
+  private muted = true;
+
+  /**
+   * Wire the platform mute toggle. Pass the current `muted` state from
+   * `useSound()` in the React layer. When muted, every public method
+   * becomes a no-op and any in-flight rolling sound is stopped.
+   */
+  setMuted(muted: boolean) {
+    this.muted = muted;
+    if (muted) this.stopRoll();
+  }
 
   private ensureCtx(): AudioContext | null {
+    if (this.muted) return null;
     if (this.ctx) return this.ctx;
     type Win = typeof window & { webkitAudioContext?: typeof AudioContext };
     const Ctor = window.AudioContext ?? (window as Win).webkitAudioContext;
