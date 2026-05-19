@@ -14,6 +14,7 @@ import { ShadowGenerator } from "@babylonjs/core/Lights/Shadows/shadowGenerator"
 import "@babylonjs/core/Lights/Shadows/shadowGeneratorSceneComponent";
 import { MeshBuilder } from "@babylonjs/core/Meshes/meshBuilder";
 import type { Mesh } from "@babylonjs/core/Meshes/mesh";
+import type { LinesMesh } from "@babylonjs/core/Meshes/linesMesh";
 import { StandardMaterial } from "@babylonjs/core/Materials/standardMaterial";
 import { DynamicTexture } from "@babylonjs/core/Materials/Textures/dynamicTexture";
 import { SoundFX } from "../sound";
@@ -115,7 +116,13 @@ function computeTotalScore(frames: FrameScore[]): number {
   return total;
 }
 
-type ThrowPhase = "aiming" | "power" | "rolling" | "settling" | "done";
+type ThrowPhase = "aiming" | "power" | "spin" | "rolling" | "settling" | "done";
+
+// How aggressively spin accumulates lateral velocity per second while the
+// ball is rolling. Tuned so spin=±1 produces a visibly hooked path that
+// can swing wide enough to convert outer-pin spares but won't curve into
+// the gutter from a centerline aim at typical power.
+const CURVE_RATE = 4;
 
 // Procedural wood-grain texture for the lane. Eight vertical planks with
 // a subtle grain speckle. Painted once into a DynamicTexture so the
@@ -414,6 +421,21 @@ export function Game({ onScore, onGameOver, onStats }: GameProps) {
     arrowHead.rotation.x = -Math.PI / 2;
     arrowHead.material = arrowMat;
 
+    // ---- Trajectory preview: a dashed line showing the predicted ball path
+    // given current aim+power+spin. Updated each frame during AIM and SPIN
+    // phases so the player can see the curve before committing.
+    const TRAJ_POINTS = 48;
+    const initialTrajPoints: Vector3[] = [];
+    for (let i = 0; i < TRAJ_POINTS; i++) initialTrajPoints.push(new Vector3(0, 0.06, 5 - i * 0.5));
+    let trajectory: LinesMesh = MeshBuilder.CreateLines(
+      "trajectory",
+      { points: initialTrajPoints, updatable: true },
+      scene,
+    );
+    trajectory.color = new Color3(0.4, 0.9, 1);
+    trajectory.alpha = 0.55;
+    trajectory.isPickable = false;
+
     // ---- HUD: 2D overlay using AdvancedDynamicTexture ----
     // We use simple DOM elements instead for maximum compatibility
     // Create HUD container
@@ -472,6 +494,42 @@ export function Game({ onScore, onGameOver, onStats }: GameProps) {
     powerLabel.textContent = "POWER";
     powerWrap.appendChild(powerLabel);
 
+    // Spin slider: horizontal bar at the bottom, centered. Visible during the
+    // Spin phase. Range -1 (full left hook) .. +1 (full right hook), 0 = straight.
+    const spinWrap = document.createElement("div");
+    spinWrap.style.cssText =
+      "position:absolute;bottom:72px;left:50%;transform:translateX(-50%);" +
+      "display:none;flex-direction:column;align-items:center;gap:6px;";
+    hudDiv.appendChild(spinWrap);
+
+    const spinContainer = document.createElement("div");
+    spinContainer.style.cssText =
+      "position:relative;width:240px;height:24px;border-radius:12px;" +
+      "background:rgba(0,0,0,0.4);border:2px solid rgba(255,255,255,0.25);" +
+      "backdrop-filter:blur(4px);overflow:hidden;";
+    spinWrap.appendChild(spinContainer);
+
+    // The fill bar grows from the center notch out toward the spin direction.
+    const spinFillDiv = document.createElement("div");
+    spinFillDiv.style.cssText =
+      "position:absolute;top:0;left:50%;height:100%;width:0%;background:#7dd3fc;" +
+      "transition:background 0.1s;";
+    spinContainer.appendChild(spinFillDiv);
+
+    // Center notch so the user can see exactly where "no spin" sits.
+    const spinNotch = document.createElement("div");
+    spinNotch.style.cssText =
+      "position:absolute;top:2px;left:50%;width:2px;height:calc(100% - 4px);" +
+      "background:rgba(255,255,255,0.55);transform:translateX(-1px);";
+    spinContainer.appendChild(spinNotch);
+
+    const spinLabel = document.createElement("div");
+    spinLabel.style.cssText =
+      "font-family:Manrope,sans-serif;font-size:11px;font-weight:600;" +
+      "color:rgba(255,255,255,0.7);letter-spacing:0.05em;";
+    spinLabel.textContent = "SPIN";
+    spinWrap.appendChild(spinLabel);
+
     // Strike/spare overlay
     const bigLabel = document.createElement("div");
     bigLabel.style.cssText =
@@ -502,6 +560,8 @@ export function Game({ onScore, onGameOver, onStats }: GameProps) {
     let aimX = 0;
     let power = 0;
     let powerDir = 1;
+    // Spin: -1 = full left hook, +1 = full right hook, 0 = straight.
+    let spin = 0;
     const ballStartZ = 5;
     let ballZ = ballStartZ;
     let ballX = 0;
@@ -524,6 +584,62 @@ export function Game({ onScore, onGameOver, onStats }: GameProps) {
     sfxRef.current = sfx;
     const GUTTER_EDGE = LANE_WIDTH / 2 - BALL_RADIUS;
 
+    // Project the predicted ball path forward from the current aim/power/spin.
+    // Used to render the trajectory line during AIM and SPIN phases. Stops
+    // early when the ball would gutter or pass the back wall so the line
+    // doesn't extend past meaningful play.
+    function simulateTrajectory(
+      startX: number,
+      powerSample: number,
+      spinSample: number,
+    ): Vector3[] {
+      const pts: Vector3[] = [];
+      const dtSim = 0.04;
+      const speed = BALL_SPEED * (0.4 + powerSample * 0.6);
+      let x = startX;
+      let z = ballStartZ;
+      let vx = 0;
+      let gutteredSim = false;
+      for (let i = 0; i < TRAJ_POINTS; i++) {
+        if (!gutteredSim && Math.abs(x) > GUTTER_EDGE) {
+          gutteredSim = true;
+        }
+        const yPos = gutteredSim ? -0.04 : 0.06;
+        pts.push(new Vector3(
+          gutteredSim ? Math.sign(x) * (LANE_WIDTH / 2 + 0.25) : x,
+          yPos,
+          z,
+        ));
+        if (!gutteredSim) {
+          vx += spinSample * CURVE_RATE * dtSim;
+          x += vx * dtSim;
+        }
+        z -= speed * dtSim;
+        if (z < PIN_Z_START - 2) {
+          // pad remaining points at the last position so the line mesh
+          // stays at a fixed length for in-place updates.
+          while (pts.length < TRAJ_POINTS) {
+            const last = pts[pts.length - 1]!;
+            pts.push(new Vector3(last.x, last.y, last.z));
+          }
+          break;
+        }
+      }
+      return pts;
+    }
+
+    function updateTrajectory() {
+      // Sample power=0.7 during AIM so the line is stable (the power bar
+      // is still oscillating); use the locked value once we're in SPIN.
+      const powerSample = throwPhase === "spin" ? power : 0.7;
+      const pts = simulateTrajectory(aimX, powerSample, spin);
+      trajectory = MeshBuilder.CreateLines(
+        "trajectory",
+        { points: pts, instance: trajectory },
+        scene,
+      );
+    }
+
     function updateHUD() {
       if (throwPhase === "aiming") {
         phaseLabel.textContent = "AIM";
@@ -533,24 +649,42 @@ export function Game({ onScore, onGameOver, onStats }: GameProps) {
           instrLabel.style.opacity = "1";
         }
         powerWrap.style.display = "none";
+        spinWrap.style.display = "none";
+        trajectory.isVisible = true;
       } else if (throwPhase === "power") {
         phaseLabel.textContent = "SET POWER";
         phaseLabel.style.opacity = "1";
         if (showInstr) {
-          instrLabel.textContent = "Tap / Space to throw!";
+          instrLabel.textContent = "Tap / Space to lock power.";
           instrLabel.style.opacity = "1";
         }
         powerWrap.style.display = "flex";
+        spinWrap.style.display = "none";
+        trajectory.isVisible = false;
+      } else if (throwPhase === "spin") {
+        phaseLabel.textContent = "SET SPIN";
+        phaseLabel.style.opacity = "1";
+        if (showInstr) {
+          instrLabel.textContent = "Drag or use arrow keys to curve. Tap / Space to throw.";
+          instrLabel.style.opacity = "1";
+        }
+        powerWrap.style.display = "none";
+        spinWrap.style.display = "flex";
+        trajectory.isVisible = true;
       } else if (throwPhase === "rolling") {
         phaseLabel.textContent = "";
         phaseLabel.style.opacity = "0";
         instrLabel.style.opacity = "0";
         powerWrap.style.display = "none";
+        spinWrap.style.display = "none";
+        trajectory.isVisible = false;
       } else if (throwPhase === "settling") {
         phaseLabel.textContent = "";
         phaseLabel.style.opacity = "0";
         instrLabel.style.opacity = "0";
         powerWrap.style.display = "none";
+        spinWrap.style.display = "none";
+        trajectory.isVisible = false;
       }
     }
 
@@ -613,9 +747,11 @@ export function Game({ onScore, onGameOver, onStats }: GameProps) {
       aimX = 0;
       power = 0;
       powerDir = 1;
+      spin = 0;
       resetBallPosition();
       arrow.isVisible = true;
       onStatsRef.current?.({ frame: Math.min(currentFrame + 1, 10) });
+      updateTrajectory();
       updateHUD();
     }
 
@@ -627,11 +763,21 @@ export function Game({ onScore, onGameOver, onStats }: GameProps) {
       updateHUD();
     }
 
+    function startSpin() {
+      throwPhase = "spin";
+      spin = 0;
+      updateTrajectory();
+      updateHUD();
+    }
+
     function throwBall() {
       throwPhase = "rolling";
       ballX = aimX;
       ballZ = ballStartZ;
-      ballVx = aimX * -0.3;
+      // Spin-driven hook: lateral velocity accumulates per-frame in the
+      // rolling-phase loop, so the ball starts straight and curves over time
+      // like a real hook ball. No more fixed aim-X reverse-drift.
+      ballVx = 0;
       guttered = false;
       ball.position.x = ballX;
       ball.position.z = ballZ;
@@ -715,18 +861,26 @@ export function Game({ onScore, onGameOver, onStats }: GameProps) {
     let pointerStartX = 0;
     let aimXAtPointerStart = 0;
 
+    let spinAtPointerStart = 0;
+
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === " " || e.key === "Enter") {
         e.preventDefault();
         if (throwPhase === "aiming") {
           startPower();
         } else if (throwPhase === "power") {
+          startSpin();
+        } else if (throwPhase === "spin") {
           throwBall();
         }
       } else if (e.key === "ArrowLeft" && throwPhase === "aiming") {
         aimX = Math.max(-LANE_WIDTH / 2 + 0.5, aimX - 0.15);
       } else if (e.key === "ArrowRight" && throwPhase === "aiming") {
         aimX = Math.min(LANE_WIDTH / 2 - 0.5, aimX + 0.15);
+      } else if (e.key === "ArrowLeft" && throwPhase === "spin") {
+        spin = Math.max(-1, spin - 0.1);
+      } else if (e.key === "ArrowRight" && throwPhase === "spin") {
+        spin = Math.min(1, spin + 0.1);
       }
     };
 
@@ -736,25 +890,36 @@ export function Game({ onScore, onGameOver, onStats }: GameProps) {
         pointerStartX = e.clientX;
         aimXAtPointerStart = aimX;
       } else if (throwPhase === "power") {
-        throwBall();
+        startSpin();
+      } else if (throwPhase === "spin") {
+        pointerDown = true;
+        pointerStartX = e.clientX;
+        spinAtPointerStart = spin;
       }
     };
 
     const handlePointerMove = (e: PointerEvent) => {
-      if (!pointerDown || throwPhase !== "aiming") return;
-      const dx = (e.clientX - pointerStartX) * 0.015;
-      aimX = Math.max(
-        -LANE_WIDTH / 2 + 0.5,
-        Math.min(LANE_WIDTH / 2 - 0.5, aimXAtPointerStart + dx),
-      );
+      if (!pointerDown) return;
+      if (throwPhase === "aiming") {
+        const dx = (e.clientX - pointerStartX) * 0.015;
+        aimX = Math.max(
+          -LANE_WIDTH / 2 + 0.5,
+          Math.min(LANE_WIDTH / 2 - 0.5, aimXAtPointerStart + dx),
+        );
+      } else if (throwPhase === "spin") {
+        const dx = (e.clientX - pointerStartX) * 0.008;
+        spin = Math.max(-1, Math.min(1, spinAtPointerStart + dx));
+      }
     };
 
     const handlePointerUp = () => {
-      if (pointerDown && throwPhase === "aiming") {
-        pointerDown = false;
-        // Always advance to power on pointer up (tap or drag-release)
-        startPower();
-      }
+      if (!pointerDown) return;
+      const wasSpin = throwPhase === "spin";
+      const wasAiming = throwPhase === "aiming";
+      pointerDown = false;
+      // A drag in either phase counts as the "commit" gesture, same as a tap.
+      if (wasAiming) startPower();
+      else if (wasSpin) throwBall();
     };
 
     window.addEventListener("keydown", handleKeyDown);
@@ -788,6 +953,23 @@ export function Game({ onScore, onGameOver, onStats }: GameProps) {
         // Arrow
         arrow.position.set(aimX, 0.05, ballStartZ - 1.8);
         arrow.isVisible = true;
+        updateTrajectory();
+      }
+
+      if (throwPhase === "spin") {
+        // Spin bar fills from center toward the current direction. Sky-blue
+        // for left hook, amber for right hook so the user can see at a glance
+        // which way the ball will curve.
+        const half = Math.abs(spin) * 50;
+        spinFillDiv.style.width = `${half}%`;
+        if (spin < 0) {
+          spinFillDiv.style.left = `${50 - half}%`;
+          spinFillDiv.style.background = "#7dd3fc";
+        } else {
+          spinFillDiv.style.left = "50%";
+          spinFillDiv.style.background = "#fbbf24";
+        }
+        updateTrajectory();
       }
 
       if (throwPhase === "power") {
@@ -814,6 +996,10 @@ export function Game({ onScore, onGameOver, onStats }: GameProps) {
       if (throwPhase === "rolling") {
         const speed = BALL_SPEED * (0.4 + power * 0.6);
         ballZ -= speed * dt;
+        // Spin accumulates lateral velocity over time. The ball starts
+        // straight (ballVx = 0 at throwBall) and curves more the longer it
+        // rolls — like a real hook ball.
+        if (!guttered) ballVx += spin * CURVE_RATE * dt;
         ballX += ballVx * dt;
 
         // Gutter: once the ball reaches the lane edge it falls into the

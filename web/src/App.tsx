@@ -82,7 +82,7 @@ export default function App() {
           ]}
           actions={<GameAuth />}
           onRestart={start}
-          rules={<div><h3 style={{fontWeight:700}}>Bowling</h3><h4 style={{fontWeight:600}}>Controls</h4><ul><li>Aim with left/right</li><li>Set power, then throw</li></ul><h4 style={{fontWeight:600}}>Rules</h4><ul><li>Full 10-frame game</li><li>Strikes (X) and spares (/) score bonus points</li><li>Gutter balls count as 0</li></ul><h4 style={{fontWeight:600}}>Scoring</h4><ul><li>Strike = 10 + next 2 rolls</li><li>Spare = 10 + next 1 roll</li><li>Perfect game = 300</li></ul><p style={{marginTop:12,fontSize:12,opacity:0.7}}>A free game on <a href="https://freegamestore.online" style={{color:"var(--accent)"}}>freegamestore.online</a></p></div>}
+          rules={<div><h3 style={{fontWeight:700}}>Bowling</h3><h4 style={{fontWeight:600}}>Controls</h4><ul><li><b>Aim</b> — drag left/right or use arrow keys</li><li><b>Power</b> — bar oscillates, tap to lock</li><li><b>Spin</b> — drag or arrows to set hook direction</li><li>The blue trajectory line previews where the ball will go</li></ul><h4 style={{fontWeight:600}}>Rules</h4><ul><li>Full 10-frame game</li><li>Strikes (X) and spares (/) score bonus points</li><li>Gutter balls count as 0</li></ul><h4 style={{fontWeight:600}}>Scoring</h4><ul><li>Strike = 10 + next 2 rolls</li><li>Spare = 10 + next 1 roll</li><li>Perfect game = 300</li></ul><p style={{marginTop:12,fontSize:12,opacity:0.7}}>A free game on <a href="https://freegamestore.online" style={{color:"var(--accent)"}}>freegamestore.online</a></p></div>}
         />
       }
     >
