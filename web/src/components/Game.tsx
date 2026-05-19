@@ -8,6 +8,9 @@ import { HemisphericLight } from "@babylonjs/core/Lights/hemisphericLight";
 import { DirectionalLight } from "@babylonjs/core/Lights/directionalLight";
 import { PointLight } from "@babylonjs/core/Lights/pointLight";
 import { ShadowGenerator } from "@babylonjs/core/Lights/Shadows/shadowGenerator";
+// Side-effect: registers the scene component that hooks shadowGen into the render pipeline.
+// Without this, `new ShadowGenerator(...)` throws "needs to be imported before".
+import "@babylonjs/core/Lights/Shadows/shadowGeneratorSceneComponent";
 import { MeshBuilder } from "@babylonjs/core/Meshes/meshBuilder";
 import type { Mesh } from "@babylonjs/core/Meshes/mesh";
 import { StandardMaterial } from "@babylonjs/core/Materials/standardMaterial";
