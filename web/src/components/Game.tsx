@@ -611,7 +611,10 @@ export function Game({ onScore, onGameOver, onStats }: GameProps) {
           z,
         ));
         if (!gutteredSim) {
-          vx += spinSample * CURVE_RATE * dtSim;
+          // Spin sign matches the slider visual: spin>0 (right on the bar)
+          // curves the ball to the player's right (camera-right). Babylon is
+          // left-handed and the camera looks down -Z, so camera-right is -X.
+          vx -= spinSample * CURVE_RATE * dtSim;
           x += vx * dtSim;
         }
         z -= speed * dtSim;
@@ -998,8 +1001,8 @@ export function Game({ onScore, onGameOver, onStats }: GameProps) {
         ballZ -= speed * dt;
         // Spin accumulates lateral velocity over time. The ball starts
         // straight (ballVx = 0 at throwBall) and curves more the longer it
-        // rolls — like a real hook ball.
-        if (!guttered) ballVx += spin * CURVE_RATE * dt;
+        // rolls — like a real hook ball. Sign matches simulateTrajectory.
+        if (!guttered) ballVx -= spin * CURVE_RATE * dt;
         ballX += ballVx * dt;
 
         // Gutter: once the ball reaches the lane edge it falls into the
