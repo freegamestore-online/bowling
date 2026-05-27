@@ -4,3 +4,6 @@ dist
 *.tsbuildinfo
 .vibe-check
 .gstack/
+
+.env
+.env.*
