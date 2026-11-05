@@ -18,6 +18,7 @@ import type { LinesMesh } from "@babylonjs/core/Meshes/linesMesh";
 import { StandardMaterial } from "@babylonjs/core/Materials/standardMaterial";
 import { DynamicTexture } from "@babylonjs/core/Materials/Textures/dynamicTexture";
 import { SoundFX } from "../sound";
+import { computeTotalScore, type FrameScore } from "../scoring";
 
 interface GameProps {
   onScore: (score: number) => void;
@@ -73,49 +74,6 @@ interface PinState {
   knockDelay: number;
 }
 
-interface FrameScore {
-  throws: number[];
-  pinsDown: number[];
-}
-
-function computeTotalScore(frames: FrameScore[]): number {
-  let total = 0;
-  const allThrows: number[] = [];
-  for (const f of frames) {
-    for (const t of f.throws) {
-      allThrows.push(t);
-    }
-  }
-
-  let throwIdx = 0;
-  for (let f = 0; f < 10; f++) {
-    const frame = frames[f];
-    if (!frame) break;
-
-    if (f < 9) {
-      if (frame.throws[0] === 10) {
-        const b1 = allThrows[throwIdx + 1] ?? 0;
-        const b2 = allThrows[throwIdx + 2] ?? 0;
-        total += 10 + b1 + b2;
-        throwIdx += 1;
-      } else if ((frame.throws[0] ?? 0) + (frame.throws[1] ?? 0) === 10) {
-        const b1 = allThrows[throwIdx + 2] ?? 0;
-        total += 10 + b1;
-        throwIdx += 2;
-      } else {
-        total += (frame.throws[0] ?? 0) + (frame.throws[1] ?? 0);
-        throwIdx += 2;
-      }
-    } else {
-      for (const t of frame.throws) {
-        total += t;
-      }
-      throwIdx += frame.throws.length;
-    }
-  }
-  return total;
-}
-
 type ThrowPhase = "aiming" | "power" | "spin" | "rolling" | "settling" | "done";
 
 // How aggressively spin accumulates lateral velocity per second while the
@@ -164,7 +122,6 @@ export function Game({ onScore, onGameOver, onStats }: GameProps) {
   // Gates the SoundFX class's playback so the topbar Mute button works.
   const { muted } = useSound();
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const engineRef = useRef<Engine | null>(null);
   const sfxRef = useRef<SoundFX | null>(null);
   const onScoreRef = useRef(onScore);
   const onGameOverRef = useRef(onGameOver);
@@ -187,7 +144,6 @@ export function Game({ onScore, onGameOver, onStats }: GameProps) {
       preserveDrawingBuffer: false,
       stencil: true,
     });
-    engineRef.current = engine;
     const scene = new Scene(engine);
     scene.clearColor = new Color4(0.06, 0.09, 0.16, 1);
 
@@ -436,9 +392,7 @@ export function Game({ onScore, onGameOver, onStats }: GameProps) {
     trajectory.alpha = 0.55;
     trajectory.isPickable = false;
 
-    // ---- HUD: 2D overlay using AdvancedDynamicTexture ----
-    // We use simple DOM elements instead for maximum compatibility
-    // Create HUD container
+    // ---- HUD: plain DOM overlay ----
     const hudDiv = document.createElement("div");
     hudDiv.style.cssText =
       "position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none;z-index:10;";
@@ -552,9 +506,6 @@ export function Game({ onScore, onGameOver, onStats }: GameProps) {
       }, 800);
     }
 
-    // Remove old 3D power bar meshes - we use DOM now
-    // (We don't create 3D power bars at all)
-
     // ---- Game state ----
     let throwPhase: ThrowPhase = "aiming";
     let aimX = 0;
@@ -575,7 +526,7 @@ export function Game({ onScore, onGameOver, onStats }: GameProps) {
     let standingBeforeThrow: boolean[] = new Array(10).fill(true) as boolean[];
     const frames: FrameScore[] = [];
     for (let i = 0; i < 10; i++) {
-      frames.push({ throws: [], pinsDown: [] });
+      frames.push({ throws: [] });
     }
 
     const sfx = new SoundFX();
@@ -802,7 +753,6 @@ export function Game({ onScore, onGameOver, onStats }: GameProps) {
 
       const frame = frames[currentFrame]!;
       frame.throws.push(newlyKnocked);
-      frame.pinsDown.push(newlyKnocked);
       updateScore();
 
       const isStrike = currentThrow === 0 && newlyKnocked === 10;
@@ -1136,7 +1086,6 @@ export function Game({ onScore, onGameOver, onStats }: GameProps) {
       // Clean up HUD
       hudDiv.remove();
       engine.dispose();
-      engineRef.current = null;
     };
   }, []);
 
