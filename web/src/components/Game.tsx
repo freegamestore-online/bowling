@@ -18,7 +18,7 @@ import type { LinesMesh } from "@babylonjs/core/Meshes/linesMesh";
 import { StandardMaterial } from "@babylonjs/core/Materials/standardMaterial";
 import { DynamicTexture } from "@babylonjs/core/Materials/Textures/dynamicTexture";
 import { SoundFX } from "../sound";
-import { computeTotalScore, isSpare as isSpareFrame, type FrameScore } from "../scoring";
+import { computeTotalScore, throwMark, type FrameScore } from "../scoring";
 
 interface GameProps {
   onScore: (score: number) => void;
@@ -758,8 +758,9 @@ export function Game({ onScore, onGameOver, onStats }: GameProps) {
       frame.throws.push(newlyKnocked);
       updateScore();
 
-      const isStrike = currentThrow === 0 && newlyKnocked === 10;
-      const isSpare = isSpareFrame(frame.throws);
+      const mark = throwMark(frame.throws);
+      const isStrike = mark === "strike";
+      const isSpare = mark === "spare";
 
       if (isStrike) {
         showBigLabel("STRIKE!");

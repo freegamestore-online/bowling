@@ -40,8 +40,21 @@ export function computeTotalScore(frames: FrameScore[]): number {
   return total;
 }
 
-// A spare clears the rack with the second ball of a frame. In the 10th frame
-// the second ball after a strike is thrown at a fresh rack, so it is not a spare.
-export function isSpare(throws: number[]): boolean {
-  return throws.length === 2 && throws[0] !== 10 && throws[0]! + throws[1]! === 10;
+export type ThrowMark = "strike" | "spare" | null;
+
+// What the last ball of a frame's `throws` was. A strike clears a fresh rack in one
+// ball; a spare clears the rest of a rack with its second ball. In the 10th frame a
+// new rack is set after a strike or spare, so the 2nd and 3rd balls can be either.
+export function throwMark(throws: number[]): ThrowMark {
+  const last = throws.length - 1;
+  if (last < 0) return null;
+  // Index of the first ball thrown at the rack the last ball was thrown at.
+  let rackStart = 0;
+  while (rackStart < last) {
+    if (throws[rackStart] === 10) rackStart += 1;
+    else if (rackStart + 1 < last) rackStart += 2;
+    else break;
+  }
+  if (last === rackStart) return throws[last] === 10 ? "strike" : null;
+  return throws[rackStart]! + throws[last]! === 10 ? "spare" : null;
 }
