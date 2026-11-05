@@ -39,3 +39,9 @@ export function computeTotalScore(frames: FrameScore[]): number {
   }
   return total;
 }
+
+// A spare clears the rack with the second ball of a frame. In the 10th frame
+// the second ball after a strike is thrown at a fresh rack, so it is not a spare.
+export function isSpare(throws: number[]): boolean {
+  return throws.length === 2 && throws[0] !== 10 && throws[0]! + throws[1]! === 10;
+}

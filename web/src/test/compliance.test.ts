@@ -69,6 +69,12 @@ describe("FreeGameStore compliance", () => {
     it("does NOT have old manifest.json link", () => {
       expect(html).not.toContain('href="/manifest.json"');
     });
+
+    // The host sends the CSP; a page-level one re-imposes the old lockdown
+    // and blocks the analytics loader (#1).
+    it("does NOT set its own Content-Security-Policy", () => {
+      expect(html).not.toMatch(/http-equiv=["']Content-Security-Policy/i);
+    });
   });
 
   describe("vite.config", () => {

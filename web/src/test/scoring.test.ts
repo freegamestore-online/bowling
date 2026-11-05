@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { computeTotalScore, type FrameScore } from "../scoring";
+import { computeTotalScore, isSpare, type FrameScore } from "../scoring";
 
 const game = (...frames: number[][]): FrameScore[] => frames.map((throws) => ({ throws }));
 
@@ -18,5 +18,22 @@ describe("computeTotalScore", () => {
 
   it("scores a partial game with pending strike bonus", () => {
     expect(computeTotalScore(game([10], [3, 4]))).toBe(24);
+  });
+});
+
+describe("isSpare", () => {
+  it("is a spare when two balls clear the rack", () => {
+    expect(isSpare([7, 3])).toBe(true);
+    expect(isSpare([0, 10])).toBe(true);
+  });
+
+  it("is not a spare after a 10th-frame strike", () => {
+    expect(isSpare([10, 3])).toBe(false);
+    expect(isSpare([10, 0])).toBe(false);
+  });
+
+  it("is not a spare for an open frame or a single ball", () => {
+    expect(isSpare([4, 3])).toBe(false);
+    expect(isSpare([3])).toBe(false);
   });
 });

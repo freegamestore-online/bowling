@@ -18,7 +18,7 @@ import type { LinesMesh } from "@babylonjs/core/Meshes/linesMesh";
 import { StandardMaterial } from "@babylonjs/core/Materials/standardMaterial";
 import { DynamicTexture } from "@babylonjs/core/Materials/Textures/dynamicTexture";
 import { SoundFX } from "../sound";
-import { computeTotalScore, type FrameScore } from "../scoring";
+import { computeTotalScore, isSpare as isSpareFrame, type FrameScore } from "../scoring";
 
 interface GameProps {
   onScore: (score: number) => void;
@@ -58,6 +58,9 @@ const BALL_SPEED = 25;
 const KNOCK_DISTANCE = 0.55;
 const PIN_CHAIN_DISTANCE = PIN_SPACING * 1.2;
 const TOTAL_FRAMES = 10;
+// Clamp the per-frame step so a lag spike or returning from a background tab
+// can't move the ball further than a pin's knock radius in one step.
+const MAX_DT = 1 / 30;
 
 interface PinState {
   mesh: Mesh;
@@ -756,8 +759,7 @@ export function Game({ onScore, onGameOver, onStats }: GameProps) {
       updateScore();
 
       const isStrike = currentThrow === 0 && newlyKnocked === 10;
-      const totalDown = frame.throws.reduce((a, b) => a + b, 0);
-      const isSpare = currentThrow === 1 && totalDown >= 10;
+      const isSpare = isSpareFrame(frame.throws);
 
       if (isStrike) {
         showBigLabel("STRIKE!");
@@ -840,6 +842,8 @@ export function Game({ onScore, onGameOver, onStats }: GameProps) {
     };
 
     const handlePointerDown = (e: PointerEvent) => {
+      // Keep receiving move/up when a drag leaves the canvas.
+      canvas.setPointerCapture?.(e.pointerId);
       if (throwPhase === "aiming") {
         pointerDown = true;
         pointerStartX = e.clientX;
@@ -881,16 +885,23 @@ export function Game({ onScore, onGameOver, onStats }: GameProps) {
       else if (wasSpin) throwBall();
     };
 
+    // System aborted the gesture (scroll, palm rejection, alert): drop the
+    // drag without committing aim or throwing.
+    const handlePointerCancel = () => {
+      pointerDown = false;
+    };
+
     window.addEventListener("keydown", handleKeyDown);
     canvas.addEventListener("pointerdown", handlePointerDown);
     canvas.addEventListener("pointermove", handlePointerMove);
     canvas.addEventListener("pointerup", handlePointerUp);
+    canvas.addEventListener("pointercancel", handlePointerCancel);
 
     // ---- Main loop ----
     startAiming();
 
     scene.registerBeforeRender(() => {
-      const dt = engine.getDeltaTime() / 1000;
+      const dt = Math.min(engine.getDeltaTime() / 1000, MAX_DT);
 
       // Fade out instructions after a few throws
       if (showInstr) {
@@ -1080,6 +1091,7 @@ export function Game({ onScore, onGameOver, onStats }: GameProps) {
       canvas.removeEventListener("pointerdown", handlePointerDown);
       canvas.removeEventListener("pointermove", handlePointerMove);
       canvas.removeEventListener("pointerup", handlePointerUp);
+      canvas.removeEventListener("pointercancel", handlePointerCancel);
       window.removeEventListener("resize", onResize);
       if (bigLabelTimer !== null) clearTimeout(bigLabelTimer);
       sfx.dispose();
